@@ -1,5 +1,6 @@
 import yt_dlp
 import torch
+import torchaudio
 import requests
 import pyaudio
 import os
@@ -8,9 +9,6 @@ from pydub import AudioSegment
 from pydub.silence import detect_nonsilent
 from pydub import AudioSegment
 import speech_recognition as sr
-import scipy
-import librosa
-from silero_vad import get_speech_timestamps, collect_chunks
 
 
 class SpeechChunker:
@@ -78,21 +76,24 @@ class SpeechChunker:
 
     def process(self):
         audio = np.frombuffer(self._data.raw_data, np.uint16)
-        audio = audio.reshape(len(audio) // 2, self._data.channels).sum(axis=1)
-        audio = librosa.util.normalize(audio.astype(np.float32))
-        audio = librosa.resample(
-            audio,
-            orig_sr=self._data.frame_rate,
-            target_sr=16000)
-        audio_tensor = torch.from_numpy(audio)
+        audio = audio.reshape(
+            len(audio) //
+            self._data.channels,
+            self._data.channels).sum(
+            axis=1)
+        audio = audio.astype(np.float32) / np.max(np.abs(audio))
+        resampler = torchaudio.transforms.Resample(
+            orig_freq=self._data.frame_rate, new_freq=16000)
+        audio = torch.tensor(audio).unsqueeze(0).float()
+        audio = resampler(audio)
         vad_model, utils = torch.hub.load(
             'snakers4/silero-vad', model='silero_vad')
         nonsilent_chunks = [
             (i["start"] *
              1000,
              i["end"] *
-                1000) for i in get_speech_timestamps(
-                audio_tensor,
+                1000) for i in utils[0](
+                audio,
                 vad_model,
                 sampling_rate=16000,
                 threshold=0.2,
@@ -110,7 +111,8 @@ class ShadowFormatter:
         self._phrases = speech_chunker
         self._repeat = repeat
         self._output_device = 1
-        self._recognizer = sr.Recognizer()
+        self._model, self._decoder, self.utils = torch.hub.load(
+            'snakers4/silero-models', model='silero_stt', onnx_model='jit_xlarge', language='en')
 
     def __iter__(self):
         return self
@@ -147,13 +149,20 @@ class ShadowFormatter:
         return sub, shadow
 
     def subtitle(self, segment):
-        segment = segment.set_channels(
-            1).set_sample_width(2).set_frame_rate(16000)
-        audio_data = sr.AudioData(segment.raw_data, 16000, 2)
-        try:
-            return self._recognizer.recognize_google(audio_data)
-        except BaseException:
-            return ""
+        audio = np.frombuffer(segment.raw_data, np.uint16)
+        audio = audio.reshape(
+            len(audio) //
+            segment.channels,
+            segment.channels).sum(
+            axis=1)
+        audio = audio.astype(np.float32) / np.max(np.abs(audio))
+        resampler = torchaudio.transforms.Resample(
+            orig_freq=segment.frame_rate, new_freq=16000)
+        audio = torch.tensor(audio).unsqueeze(0).float()
+        audio = resampler(audio)
+        input_audio = self.utils[3](audio)
+        transcriptions = self._model(input_audio)
+        return self._decoder(transcriptions[0].cpu())
 
     def play(self, segment):
         try:
