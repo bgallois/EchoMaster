@@ -15,8 +15,9 @@ from silero_vad import get_speech_timestamps, collect_chunks
 
 class SpeechChunker:
 
-    def __init__(self):
+    def __init__(self, chunk_duration=10):
         self._data = None
+        self._chunk_duration = chunk_duration
         self._url = None
         self._phrases = None
 
@@ -37,6 +38,17 @@ class SpeechChunker:
     @url.setter
     def url(self, url):
         self._url = url
+
+    @property
+    def chunk_duration(self):
+        return self._chunk_duration
+
+    @chunk_duration.setter
+    def chunk_duration(self, chunk_duration):
+        self._chunk_duration = chunk_duration
+        self.process()
+
+    def load(self):
         self.download()
         self.process()
 
@@ -64,7 +76,7 @@ class SpeechChunker:
         self._data = AudioSegment.silent(duration=1000) + AudioSegment.from_file(
             "data.m4a", "m4a") + AudioSegment.silent(duration=1000)
 
-    def process(self, silence_thresh=-30, min_silence_len=250, seek_step=1):
+    def process(self):
         audio = np.frombuffer(self._data.raw_data, np.uint16)
         audio = audio.reshape(len(audio) // 2, self._data.channels).sum(axis=1)
         audio = librosa.util.normalize(audio.astype(np.float32))
@@ -87,9 +99,8 @@ class SpeechChunker:
                 return_seconds=True,
                 speech_pad_ms=80,
                 min_speech_duration_ms=1000,
-                max_speech_duration_s=10,
+                max_speech_duration_s=self._chunk_duration,
                 min_silence_duration_ms=50)]
-        print(nonsilent_chunks)
         self._phrases = iter(nonsilent_chunks)
 
 
@@ -117,7 +128,6 @@ class ShadowFormatter:
     @repeat.setter
     def repeat(self, repeat):
         self._repeat = repeat
-        self.format()
 
     @property
     def output_device(self):

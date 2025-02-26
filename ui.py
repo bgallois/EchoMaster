@@ -20,10 +20,20 @@ class MainWindow(Gtk.Window):
 
         self.load = Gtk.Button(label="Load")
         self.load.connect("clicked", self.on_loaded)
-        self.grid.attach(self.load, 4, 0, 1, 1)
+        self.grid.attach_next_to(
+            self.load,
+            self.entry,
+            Gtk.PositionType.RIGHT,
+            1,
+            1)
 
         self.repeat_label = Gtk.Label(label="Repeat")
-        self.grid.attach(self.repeat_label, 0, 1, 1, 1)
+        self.grid.attach_next_to(
+            self.repeat_label,
+            self.entry,
+            Gtk.PositionType.BOTTOM,
+            1,
+            1)
 
         self.repeat = Gtk.SpinButton(
             adjustment=Gtk.Adjustment(
@@ -33,23 +43,68 @@ class MainWindow(Gtk.Window):
                 step_increment=1,
                 page_increment=3,
                 page_size=0))
-        self.repeat.connect("changed", self.on_params_changed)
-        self.grid.attach(self.repeat, 1, 1, 1, 1)
+        self.repeat.connect("changed", self.on_formatter_changed)
+        self.grid.attach_next_to(
+            self.repeat,
+            self.repeat_label,
+            Gtk.PositionType.RIGHT,
+            1,
+            1)
 
         self.output_label = Gtk.Label(label="Output")
-        self.grid.attach(self.output_label, 0, 2, 1, 1)
+        self.grid.attach_next_to(
+            self.output_label,
+            self.repeat_label,
+            Gtk.PositionType.BOTTOM,
+            1,
+            1)
 
         self.output = Gtk.DropDown.new_from_strings(self.list_audio_devices())
         self.output.connect("notify::selected", self.on_output_changed)
-        self.grid.attach(self.output, 1, 2, 1, 1)
+        self.grid.attach_next_to(
+            self.output,
+            self.output_label,
+            Gtk.PositionType.RIGHT,
+            1,
+            1)
+
+        self.max_chunk_label = Gtk.Label(label="Max chunk duration")
+        self.grid.attach_next_to(
+            self.max_chunk_label,
+            self.output_label,
+            Gtk.PositionType.BOTTOM,
+            1,
+            1)
+
+        self.max_chunk = Gtk.SpinButton(
+            adjustment=Gtk.Adjustment(
+                value=10,
+                lower=5,
+                upper=40,
+                step_increment=5,
+                page_increment=3,
+                page_size=0))
+        self.max_chunk.connect("changed", self.on_chunker_changed)
+        self.grid.attach_next_to(
+            self.max_chunk,
+            self.max_chunk_label,
+            Gtk.PositionType.RIGHT,
+            1,
+            1)
 
         self.sub = Gtk.Label(label="Subtitle")
         self.sub.set_vexpand(True)
-        self.grid.attach(self.sub, 0, 3, 6, 1)
+        self.grid.attach_next_to(
+            self.sub,
+            self.max_chunk_label,
+            Gtk.PositionType.BOTTOM,
+            4,
+            1)
 
         self.button = Gtk.ToggleButton(label="Start")
         self.button.connect("toggled", self.on_started)
-        self.grid.attach(self.button, 0, 4, 6, 1)
+        self.grid.attach_next_to(
+            self.button, self.sub, Gtk.PositionType.BOTTOM, 4, 1)
 
         self._bc = SpeechChunker()
         self._data = None
@@ -65,12 +120,16 @@ class MainWindow(Gtk.Window):
 
     def on_loaded(self, button):
         self._bc.url = self.entry.get_text()
+        self._bc.load()
         self._data = ShadowFormatter(self._bc, int(self.repeat.get_value()))
 
-    def on_params_changed(self, value):
+    def on_chunker_changed(self, value):
         if self._data:
-            self._data = ShadowFormatter(
-                self._bc, int(self.repeat.get_value()))
+            self._bc.chunk_duration = int(self.max_chunk.get_value())
+
+    def on_formatter_changed(self, value):
+        if self._data:
+            self._data.repeat = int(self.repeat.get_value())
 
     def run_audio(self):
         for s, p in self._data:
@@ -78,9 +137,10 @@ class MainWindow(Gtk.Window):
                 break
             GLib.idle_add(self.sub.set_label, s)
             self._data.play(p)
+        else:
+            self._data.reset()
 
         self.button.set_active(False)
-        self._data.reset()
         self.button.set_label("Play")
 
     def on_started(self, button):
