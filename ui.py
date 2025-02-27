@@ -1,9 +1,10 @@
-import pyaudio
-from speech_chunker import SpeechChunker, ShadowFormatter
+from gi.repository import Gtk, GLib, Pango, Gdk
 import threading
-from gi.repository import Gtk, GLib
+from speech_chunker import SpeechChunker, ShadowFormatter
+import pyaudio
 import gi
 gi.require_version('Gtk', '4.0')
+gi.require_version('Gdk', '4.0')
 
 
 class MainWindow(Gtk.Window):
@@ -92,7 +93,8 @@ class MainWindow(Gtk.Window):
             1,
             1)
 
-        self.sub = Gtk.Label(label="Subtitle")
+        self.sub = Gtk.Label()
+        self.sub.set_markup("<span font_desc='Arial 20'>Subtitle!</span>")
         self.sub.set_vexpand(True)
         self.grid.attach_next_to(
             self.sub,
@@ -118,15 +120,28 @@ class MainWindow(Gtk.Window):
         if self._data:
             self._data.output_device = dropdown.get_selected()
 
+    def waiting(func):
+        def inner(*args, **kwargs):
+            args[0].set_cursor(Gdk.Cursor.new_from_name("progress"))
+            GLib.MainContext.default().iteration(False)
+            try:
+                return func(*args, **kwargs)
+            finally:
+                args[0].set_cursor(None)
+        return inner
+
+    @waiting
     def on_loaded(self, button):
         self._bc.url = self.entry.get_text()
         self._bc.load()
         self._data = ShadowFormatter(self._bc, int(self.repeat.get_value()))
 
+    @waiting
     def on_chunker_changed(self, value):
         if self._data:
             self._bc.chunk_duration = int(self.max_chunk.get_value())
 
+    @waiting
     def on_formatter_changed(self, value):
         if self._data:
             self._data.repeat = int(self.repeat.get_value())
@@ -135,7 +150,8 @@ class MainWindow(Gtk.Window):
         for s, p in self._data:
             if self.stop_event.is_set():
                 break
-            GLib.idle_add(self.sub.set_label, s)
+            GLib.idle_add(
+                self.sub.set_markup, "<span font_desc='Arial 20'>{}</span>".format(s))
             self._data.play(p)
         else:
             self._data.reset()
