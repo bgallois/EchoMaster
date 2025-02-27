@@ -18,6 +18,8 @@ class SpeechChunker:
         self._chunk_duration = chunk_duration
         self._url = None
         self._phrases = None
+        self.model, self.utils = torch.hub.load(
+            'snakers4/silero-vad', model='silero_vad')
 
     def __iter__(self):
         return self
@@ -71,30 +73,28 @@ class SpeechChunker:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             ydl.download(self._url)
 
-        self._data = AudioSegment.silent(duration=1000) + AudioSegment.from_file(
-            "data.m4a", "m4a") + AudioSegment.silent(duration=1000)
+        self._data = AudioSegment.from_file(
+            "data.m4a", "m4a")
 
     def process(self):
-        audio = np.frombuffer(self._data.raw_data, np.uint16)
+        audio = np.frombuffer(self._data.raw_data, np.int16)
         audio = audio.reshape(
             len(audio) //
             self._data.channels,
-            self._data.channels).sum(
+            self._data.channels).mean(
             axis=1)
-        audio = audio.astype(np.float32) / np.max(np.abs(audio))
+        audio = audio.astype(np.float32) / 32767.5
         resampler = torchaudio.transforms.Resample(
             orig_freq=self._data.frame_rate, new_freq=16000)
-        audio = torch.tensor(audio).unsqueeze(0).float()
+        audio = torch.tensor(audio).unsqueeze(0)
         audio = resampler(audio)
-        vad_model, utils = torch.hub.load(
-            'snakers4/silero-vad', model='silero_vad')
         nonsilent_chunks = [
             (i["start"] *
              1000,
              i["end"] *
-                1000) for i in utils[0](
+                1000) for i in self.utils[0](
                 audio,
-                vad_model,
+                self.model,
                 sampling_rate=16000,
                 threshold=0.2,
                 return_seconds=True,
@@ -112,7 +112,7 @@ class ShadowFormatter:
         self._repeat = repeat
         self._output_device = 1
         self._model, self._decoder, self.utils = torch.hub.load(
-            'snakers4/silero-models', model='silero_stt', onnx_model='jit_xlarge', language='en')
+            'snakers4/silero-models', model='silero_stt', jit_model='jit_xlarge', language='en')
 
     def __iter__(self):
         return self
@@ -149,16 +149,16 @@ class ShadowFormatter:
         return sub, shadow
 
     def subtitle(self, segment):
-        audio = np.frombuffer(segment.raw_data, np.uint16)
+        audio = np.frombuffer(segment.raw_data, np.int16)
         audio = audio.reshape(
             len(audio) //
             segment.channels,
-            segment.channels).sum(
+            segment.channels).mean(
             axis=1)
-        audio = audio.astype(np.float32) / np.max(np.abs(audio))
+        audio = audio.astype(np.float32) / 32767.5
         resampler = torchaudio.transforms.Resample(
             orig_freq=segment.frame_rate, new_freq=16000)
-        audio = torch.tensor(audio).unsqueeze(0).float()
+        audio = torch.tensor(audio).unsqueeze(0)
         audio = resampler(audio)
         input_audio = self.utils[3](audio)
         transcriptions = self._model(input_audio)
