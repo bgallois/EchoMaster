@@ -1,8 +1,9 @@
 import torch
+from pydub import AudioSegment
 import zipfile
 import torchaudio
 from glob import glob
-from speech_chunker import SpeechChunker, ShadowFormatter
+from speech_chunker import SpeechChunker, ShadowFormatter, SpeechComparator
 import numpy as np
 import pytest
 
@@ -47,3 +48,25 @@ def test_vad():
             min_silence_duration_ms=50)]
     test_output = bc._phrases
     assert reference_output == list(test_output)
+
+
+def add_noise(audio, mean=0, noise=1):
+    data = np.frombuffer(audio.raw_data, np.int16).copy().astype(np.float64)
+    data += np.random.normal(mean *
+                             data.mean(), noise *
+                             data.std(), data.shape)
+    return AudioSegment(data=data.astype(np.int16),
+                        sample_width=audio.sample_width, frame_rate=audio.frame_rate, channels=audio.channels)
+
+
+def test_comparator():
+    bc = SpeechChunker()
+    bc.url = "https://www.youtube.com/watch?v=8LLMbDXdyRI"
+    bc.load()
+    cp = SpeechComparator()
+
+    assert cp.compare(bc._data, bc._data) > 0.9
+    assert np.abs(cp.compare(bc._data, bc._data.reverse())) < 0.1
+
+    audio = add_noise(bc._data, noise=1e-2)
+    assert cp.compare(bc._data, audio) > 0.9

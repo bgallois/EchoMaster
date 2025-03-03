@@ -1,4 +1,7 @@
 import yt_dlp
+from fastdtw import fastdtw
+import time
+import threading
 import torch
 import torchaudio
 import requests
@@ -9,6 +12,7 @@ from pydub import AudioSegment
 from pydub.silence import detect_nonsilent
 from pydub import AudioSegment
 import speech_recognition as sr
+import scipy
 
 
 class SpeechChunker:
@@ -77,7 +81,7 @@ class SpeechChunker:
             "data.m4a", "m4a")
 
     def process(self):
-        audio = np.frombuffer(self._data.raw_data, np.int16)
+        audio = np.frombuffer(self._data.raw_data, np.int16).copy()
         audio = audio.reshape(
             len(audio) //
             self._data.channels,
@@ -110,7 +114,9 @@ class ShadowFormatter:
     def __init__(self, speech_chunker, repeat=1):
         self._phrases = speech_chunker
         self._repeat = repeat
-        self._output_device = 1
+        self._output_device = 2
+        self._input_device = 7
+        self._start_event = threading.Event()
         self._model, self._decoder, self.utils = torch.hub.load(
             'snakers4/silero-models', model='silero_stt', jit_model='jit_xlarge', language='en')
 
@@ -122,6 +128,14 @@ class ShadowFormatter:
 
     def reset(self):
         self._phrases.reset()
+
+    @property
+    def input_device(self):
+        return self._input
+
+    @input_device.setter
+    def input_device(self, input_device):
+        self._input_device = input_device
 
     @property
     def repeat(self):
@@ -143,9 +157,8 @@ class ShadowFormatter:
         shadow = AudioSegment.silent(duration=100)
         i = next(self._phrases)
         sub = self.subtitle(i)
-        for _ in range(self._repeat):
-            shadow += i
-            shadow += AudioSegment.silent(duration=len(i))
+        shadow += i
+        shadow += AudioSegment.silent(duration=len(i))
         return sub, shadow
 
     def subtitle(self, segment):
@@ -164,20 +177,101 @@ class ShadowFormatter:
         transcriptions = self._model(input_audio)
         return self._decoder(transcriptions[0].cpu())
 
-    def play(self, segment):
-        try:
-            p = pyaudio.PyAudio()
-            audio_data = segment.raw_data
+    def play_audio(self, stream, audio):
+        self._start_event.wait()
+        stream.write(audio)
 
-            stream = p.open(format=p.get_format_from_width(segment.sample_width),
+    def record_audio(self, stream, frames, duration):
+        self._start_event.wait()
+        start_time = time.time()
+        while time.time() - start_time < duration / 1000:
+            input_audio = stream.read(512)
+            frames.append(input_audio)
+
+    def play(self, segment):
+        # try:
+        p = pyaudio.PyAudio()
+        audio_data = segment.raw_data
+
+        stream_out = p.open(format=p.get_format_from_width(segment.sample_width),
                             channels=segment.channels,
                             rate=segment.frame_rate,
                             output_device_index=self._output_device,
                             output=True)
 
-            stream.write(audio_data)
-            stream.stop_stream()
-            stream.close()
-            p.terminate()
-        except BaseException:
-            pass
+        stream_in = p.open(format=pyaudio.paInt16,
+                           channels=1,
+                           frames_per_buffer=512,
+                           rate=44100,
+                           input_device_index=self._input_device,
+                           input=True)
+        frames = []
+        record_thread = threading.Thread(
+            target=self.record_audio, args=(
+                stream_in, frames, len(segment)))
+        play_thread = threading.Thread(
+            target=self.play_audio, args=(
+                stream_out, audio_data))
+
+        record_thread.start()
+        play_thread.start()
+        self._start_event.set()
+
+        play_thread.join()
+        record_thread.join()
+
+        stream_out.stop_stream()
+        stream_in.stop_stream()
+        stream_out.close()
+        stream_in.close()
+
+        p.terminate()
+        self._start_event.clear()
+
+        return AudioSegment(data=b''.join(frames),
+                            sample_width=2, frame_rate=44100, channels=1)
+        # except BaseException:
+        #   pass
+
+
+class SpeechComparator:
+
+    def __init__(self):
+        self._model = torchaudio.models.wav2vec2_large()
+        self._model.eval()
+
+    def extract_features(self, segment):
+        audio = np.frombuffer(segment.raw_data, np.int16)
+        audio = audio.reshape(
+            len(audio) //
+            segment.channels,
+            segment.channels).mean(
+            axis=1)
+        audio = audio.astype(np.float32) / 32767.5
+        resampler = torchaudio.transforms.Resample(
+            orig_freq=segment.frame_rate, new_freq=16000)
+        audio = torch.tensor(audio).unsqueeze(0)
+        audio = resampler(audio)
+        features, _ = self._model.extract_features(waveforms=audio)
+        return features[4].squeeze(0)
+
+    def preprocess(self, reference, audio):
+        cut = len(reference) // 2
+        reference = reference[:cut]
+        audio = audio[cut:]
+        return (reference, audio)
+
+    def normalize(self, feature):
+        return (feature - feature.mean()) / (feature.std() + 1e-8)
+
+    def compare(self, reference, audio):
+        reference, audio = self.preprocess(reference, audio)
+        reference = self.normalize(self.extract_features(reference))
+        audio = self.normalize(self.extract_features(audio))
+        if (diff := reference.shape[0] - audio.shape[0]) < 0:
+            audio = audio[:len(reference)]
+        elif diff > 0:
+            audio = torch.nn.functional.pad(audio, (diff, 0))
+        distance, path = fastdtw(reference.detach().numpy(
+        ).T, audio.detach().numpy().T, dist=scipy.spatial.distance.cosine)
+        return 1 / (1 + distance)

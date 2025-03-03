@@ -1,6 +1,6 @@
 from gi.repository import Gtk, GLib, Pango, Gdk
 import threading
-from speech_chunker import SpeechChunker, ShadowFormatter
+from speech_chunker import SpeechChunker, ShadowFormatter, SpeechComparator
 import pyaudio
 import gi
 gi.require_version('Gtk', '4.0')
@@ -69,10 +69,27 @@ class MainWindow(Gtk.Window):
             1,
             1)
 
+        self.input_label = Gtk.Label(label="Input")
+        self.grid.attach_next_to(
+            self.input_label,
+            self.output_label,
+            Gtk.PositionType.BOTTOM,
+            1,
+            1)
+
+        self.input = Gtk.DropDown.new_from_strings(self.list_audio_devices())
+        self.input.connect("notify::selected", self.on_input_changed)
+        self.grid.attach_next_to(
+            self.input,
+            self.input_label,
+            Gtk.PositionType.RIGHT,
+            1,
+            1)
+
         self.max_chunk_label = Gtk.Label(label="Max chunk duration")
         self.grid.attach_next_to(
             self.max_chunk_label,
-            self.output_label,
+            self.input_label,
             Gtk.PositionType.BOTTOM,
             1,
             1)
@@ -110,6 +127,7 @@ class MainWindow(Gtk.Window):
 
         self._bc = SpeechChunker()
         self._data = None
+        self._comparator = SpeechComparator()
         self.stop_event = threading.Event()
 
     def on_delete_event(self, widget, event):
@@ -119,6 +137,10 @@ class MainWindow(Gtk.Window):
     def on_output_changed(self, dropdown, param):
         if self._data:
             self._data.output_device = dropdown.get_selected()
+
+    def on_input_changed(self, dropdown, param):
+        if self._data:
+            self._data.input_device = dropdown.get_selected()
 
     def waiting(func):
         def inner(*args, **kwargs):
@@ -151,8 +173,9 @@ class MainWindow(Gtk.Window):
             if self.stop_event.is_set():
                 break
             GLib.idle_add(
-                self.sub.set_markup, "<span font_desc='Arial 20'>{}</span>".format(s))
-            self._data.play(p)
+                self.sub.set_markup, "<span font_desc='Arial 16'>{}</span>".format(s))
+            record = self._data.play(p)
+            # self._comparator.compare(p, record) # TODO more robust metric
         else:
             self._data.reset()
 
