@@ -111,9 +111,8 @@ class SpeechChunker:
 
 class ShadowFormatter:
 
-    def __init__(self, speech_chunker, repeat=1):
+    def __init__(self, speech_chunker):
         self._phrases = speech_chunker
-        self._repeat = repeat
         self._output_device = 2
         self._input_device = 7
         self._start_event = threading.Event()
@@ -136,14 +135,6 @@ class ShadowFormatter:
     @input_device.setter
     def input_device(self, input_device):
         self._input_device = input_device
-
-    @property
-    def repeat(self):
-        return self._repeat
-
-    @repeat.setter
-    def repeat(self, repeat):
-        self._repeat = repeat
 
     @property
     def output_device(self):
@@ -177,41 +168,43 @@ class ShadowFormatter:
         transcriptions = self._model(input_audio)
         return self._decoder(transcriptions[0].cpu())
 
-    def play_audio(self, stream, audio):
+    def play_audio(self, p, segment):
         self._start_event.wait()
-        stream.write(audio)
-
-    def record_audio(self, stream, frames, duration):
-        self._start_event.wait()
-        start_time = time.time()
-        while time.time() - start_time < duration / 1000:
-            input_audio = stream.read(512)
-            frames.append(input_audio)
-
-    def play(self, segment):
-        # try:
-        p = pyaudio.PyAudio()
         audio_data = segment.raw_data
-
         stream_out = p.open(format=p.get_format_from_width(segment.sample_width),
                             channels=segment.channels,
                             rate=segment.frame_rate,
                             output_device_index=self._output_device,
                             output=True)
+        stream_out.write(audio_data)
+        stream_out.stop_stream()
+        stream_out.close()
 
-        stream_in = p.open(format=pyaudio.paInt16,
-                           channels=1,
-                           frames_per_buffer=512,
-                           rate=44100,
-                           input_device_index=self._input_device,
-                           input=True)
+    def record_audio(self, p, frames, duration):
+        self._start_event.wait()
+        start_time = time.time()
+        stream = p.open(format=pyaudio.paInt16,
+                        channels=1,
+                        frames_per_buffer=512,
+                        rate=44100,
+                        input_device_index=self._input_device,
+                        input=True)
+        while time.time() - start_time < duration / 1000:
+            input_audio = stream.read(512)
+            frames.append(input_audio)
+        stream.stop_stream()
+        stream.close()
+
+    def play(self, segment):
+        # try:
+        p = pyaudio.PyAudio()
+
         frames = []
         record_thread = threading.Thread(
             target=self.record_audio, args=(
-                stream_in, frames, len(segment)))
+                p, frames, len(segment)))
         play_thread = threading.Thread(
-            target=self.play_audio, args=(
-                stream_out, audio_data))
+            target=self.play_audio, args=(p, segment))
 
         record_thread.start()
         play_thread.start()
@@ -220,20 +213,16 @@ class ShadowFormatter:
         play_thread.join()
         record_thread.join()
 
-        stream_out.stop_stream()
-        stream_in.stop_stream()
-        stream_out.close()
-        stream_in.close()
-
         p.terminate()
         self._start_event.clear()
 
-        return AudioSegment(data=b''.join(frames),
+        return AudioSegment(data=b''.join(frames[len(frames) // 2:]),
                             sample_width=2, frame_rate=44100, channels=1)
         # except BaseException:
         #   pass
 
 
+# TODO
 class SpeechComparator:
 
     def __init__(self):

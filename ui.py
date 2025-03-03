@@ -28,7 +28,7 @@ class MainWindow(Gtk.Window):
             1,
             1)
 
-        self.repeat_label = Gtk.Label(label="Repeat")
+        self.repeat_label = Gtk.Label(label="Number of Repetitions")
         self.grid.attach_next_to(
             self.repeat_label,
             self.entry,
@@ -48,6 +48,14 @@ class MainWindow(Gtk.Window):
         self.grid.attach_next_to(
             self.repeat,
             self.repeat_label,
+            Gtk.PositionType.RIGHT,
+            1,
+            1)
+
+        self.replay_checkbox = Gtk.CheckButton(label="Replay Performance")
+        self.grid.attach_next_to(
+            self.replay_checkbox,
+            self.repeat,
             Gtk.PositionType.RIGHT,
             1,
             1)
@@ -156,7 +164,7 @@ class MainWindow(Gtk.Window):
     def on_loaded(self, button):
         self._bc.url = self.entry.get_text()
         self._bc.load()
-        self._data = ShadowFormatter(self._bc, int(self.repeat.get_value()))
+        self._data = ShadowFormatter(self._bc)
 
     @waiting
     def on_chunker_changed(self, value):
@@ -166,16 +174,19 @@ class MainWindow(Gtk.Window):
     @waiting
     def on_formatter_changed(self, value):
         if self._data:
-            self._data.repeat = int(self.repeat.get_value())
+            ...
 
     def run_audio(self):
         for s, p in self._data:
-            if self.stop_event.is_set():
-                break
-            GLib.idle_add(
-                self.sub.set_markup, "<span font_desc='Arial 16'>{}</span>".format(s))
-            record = self._data.play(p)
-            # self._comparator.compare(p, record) # TODO more robust metric
+            for _ in range(int(self.repeat.get_value())):
+                if self.stop_event.is_set():
+                    break
+                GLib.idle_add(
+                    self.sub.set_markup, "<span font_desc='Arial 16'>{}</span>".format(s))
+                record = self._data.play(p)
+                if self.replay_checkbox.get_active():
+                    self._data.play(record)
+                # self._comparator.compare(p, record) # TODO more robust metric
         else:
             self._data.reset()
 
